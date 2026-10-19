@@ -1,0 +1,18 @@
+analyzer:
+  exclude:
+    - build/**
+    - android/**
+    - windows/**
+    - macos/**
+    - linux/**
+include: package:flutter_lints/flutter.yaml
+
+# Additional information about this file can be found at
+# https://dart.dev/guides/language/analysis-options
+
+linter:
+  rules:
+    # Disable dangling library doc comments warning - in Dart 3, library directives are optional
+    dangling_library_doc_comments: false
+    # Allow type annotations in web interop code
+    prefer_typing_uninitialized_variables: false

@@ -1,0 +1,492 @@
+name: Flutter 构建
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      skip_release:
+        description: '不创建 Release'
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+env:
+    FLUTTER_VERSION: '3.47.7'
+
+jobs:
+    build-windows:
+        name: 构建 Windows (${{ matrix.arch }})
+        strategy:
+            fail-fast: false
+            matrix:
+                include:
+                    - arch: x64
+                      runner: windows-latest
+                      installer_arch: x64compatible
+                    - arch: arm64
+                      runner: windows-11-arm
+                      installer_arch: arm64
+        runs-on: ${{ matrix.runner }}
+        env:
+            WINDOWS_ARCH: ${{ matrix.arch }}
+            INSTALLER_ARCH: ${{ matrix.installer_arch }}
+        steps:
+            - name: 签出代码
+              uses: actions/checkout@v6
+            - name: 配置 Flutter (x64)
+              if: matrix.arch == 'x64'
+              uses: subosito/flutter-action@v2
+              with:
+                flutter-version: ${{ env.FLUTTER_VERSION }}
+                channel: 'stable'
+                cache: true
+            # Clone the pinned SDK so its bootstrap downloads native ARM64 Dart.
+            # Flutter 3.47 chooses the Windows target from the Dart process ABI.
+            - name: 配置 Flutter (原生 ARM64)
+              if: matrix.arch == 'arm64'
+              shell: pwsh
+              run: |
+                $flutterDir = Join-Path $env:RUNNER_TEMP "flutter-arm64"
+                git clone --depth 1 --branch $env:FLUTTER_VERSION https://github.com/flutter/flutter.git $flutterDir
+                if ($LASTEXITCODE -ne 0) { throw "Flutter checkout failed" }
+                $flutterBin = Join-Path $flutterDir "bin"
+                $flutterBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+                & "$flutterBin/flutter.bat" --version
+                if ($LASTEXITCODE -ne 0) { throw "Flutter bootstrap failed" }
+                & "$flutterBin/flutter.bat" precache --windows
+                if ($LASTEXITCODE -ne 0) { throw "Flutter Windows precache failed" }
+            - name: 安装依赖
+              run: flutter pub get
+            - name: 构建 Windows 版本
+              run: flutter build windows --release
+            - name: 校验 Windows 二进制架构
+              shell: pwsh
+              run: |
+                $releaseDir = "build/windows/$env:WINDOWS_ARCH/runner/Release"
+                if (-not (Test-Path "$releaseDir/witrn_analyzer.exe")) {
+                  throw "Missing $env:WINDOWS_ARCH executable; check the Flutter SDK architecture"
+                }
+                $expected = if ($env:WINDOWS_ARCH -eq "arm64") { 0xAA64 } else { 0x8664 }
+                Get-ChildItem $releaseDir -Recurse -Include *.exe,*.dll | ForEach-Object {
+                  $bytes = [System.IO.File]::ReadAllBytes($_.FullName)
+                  $peOffset = [BitConverter]::ToInt32($bytes, 0x3C)
+                  $machine = [BitConverter]::ToUInt16($bytes, $peOffset + 4)
+                  if ($machine -ne $expected) { throw "Unexpected PE architecture in $($_.Name)" }
+                }
+            - name: 打包 Windows 构建产物
+              shell: pwsh
+              run: |
+                $VERSION = (Select-String -Path pubspec.yaml -Pattern '^version:' | ForEach-Object { $_.Line -replace 'version:\s*', '' -replace '\+.*', '' }).Trim()
+                Write-Host "VERSION=$VERSION"
+                # 创建 zip 包
+                Compress-Archive -Path build/windows/$env:WINDOWS_ARCH/runner/Release/* -DestinationPath "WITRN-Analyzer-Windows-$VERSION-$env:WINDOWS_ARCH.zip"
+            - name: 使用 Inno Setup 创建 Windows 安装程序
+              shell: pwsh
+              run: |
+                $VERSION = (Select-String -Path pubspec.yaml -Pattern '^version:' | ForEach-Object { $_.Line -replace 'version:\s*', '' -replace '\+.*', '' }).Trim()
+                Write-Host "VERSION=$VERSION"
+                # 通过 Chocolatey 安装 Inno Setup
+                Write-Host "Installing Inno Setup via Chocolatey..."
+                choco install innosetup -y --no-progress
+                Write-Host "Inno Setup installed"
+                # 定位 ISCC.exe
+                $isccPath = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+                if (-not (Test-Path $isccPath)) {
+                  Write-Host "ISCC not at default path, searching..."
+                  $found = Get-ChildItem -Path "C:\Program Files (x86)" -Recurse -Filter "ISCC.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+                  if ($found) { $isccPath = $found.FullName }
+                }
+                if (-not (Test-Path $isccPath)) {
+                  throw "ISCC.exe not found after Chocolatey install"
+                }
+                Write-Host "Found ISCC at: $isccPath"
+                # 创建 Inno Setup 脚本
+                $issContent = "[Setup]`n"
+                $issContent += "AppName=WITRN-Analyzer`n"
+                $issContent += "AppVersion=$VERSION`n"
+                $issContent += "DefaultDirName={autopf}\WITRN Analyzer`n"
+                $issContent += "DefaultGroupName=WITRN-Analyzer`n"
+                $issContent += "OutputDir=.`n"
+                $issContent += "OutputBaseFilename=WITRN-Analyzer-Windows-$VERSION-$env:WINDOWS_ARCH-setup`n"
+                $issContent += "Compression=lzma2`n"
+                $issContent += "SolidCompression=yes`n"
+                $issContent += "ArchitecturesAllowed=$env:INSTALLER_ARCH`n"
+                $issContent += "ArchitecturesInstallIn64BitMode=$env:INSTALLER_ARCH`n"
+                $issContent += "`n"
+                $issContent += "[Files]`n"
+                $issContent += "Source: `"build\windows\$env:WINDOWS_ARCH\runner\Release\*`"; DestDir: `"{app}`"; Flags: ignoreversion recursesubdirs`n"
+                $issContent += "`n"
+                $issContent += "[Icons]`n"
+                $issContent += "Name: `"{group}\WITRN-Analyzer`"; Filename: `"{app}\witrn_analyzer.exe`"`n"
+                $issContent += "Name: `"{commondesktop}\WITRN-Analyzer`"; Filename: `"{app}\witrn_analyzer.exe`"`n"
+                $issContent += "`n"
+                $issContent += "[Run]`n"
+                $issContent += "Filename: `"{app}\witrn_analyzer.exe`"; Description: `"Launch WITRN-Analyzer`"; Flags: nowait postinstall skipifsilent`n"
+                $issContent | Out-File -FilePath "setup.iss" -Encoding UTF8 -NoNewline
+                Write-Host "创建 setup.iss"
+                # 运行 ISCC.exe 创建安装程序
+                Write-Host "运行 ISCC.exe 创建安装程序..."
+                & "$isccPath" "setup.iss"
+                if ($LASTEXITCODE -ne 0) {
+                  throw "ISCC.exe failed with exit code $LASTEXITCODE"
+                }
+                Write-Host "安装程序创建成功"
+            - name: 上传 Windows 构建产物
+              uses: actions/upload-artifact@v7
+              with:
+                name: windows-${{ matrix.arch }}-release
+                path: |
+                  WITRN-Analyzer-Windows-*-${{ matrix.arch }}.zip
+                  WITRN-Analyzer-Windows-*-${{ matrix.arch }}-setup.exe
+                retention-days: 7
+                if-no-files-found: error
+
+    build-linux-x64:
+        name: 构建 Linux (x64)
+        runs-on: ubuntu-24.04
+        steps:
+            - name: 签出代码
+              uses: actions/checkout@v6
+            - name: 配置 Linux (x64)
+              run: |
+                sudo apt-get update
+                sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev libstdc++-12-dev libudev-dev libusb-1.0-0-dev libhidapi-hidraw0
+            - name: 配置 Flutter
+              uses: subosito/flutter-action@v2
+              with:
+                flutter-version: ${{ env.FLUTTER_VERSION }}
+                channel: 'stable'
+                cache: true
+            - name: 安装依赖
+              run: flutter pub get
+            - name: 构建 Linux (x64) 版本
+              run: flutter build linux --release
+            - name: 安装打包工具
+              run: |
+                sudo apt-get update
+                sudo apt-get install -y libfuse2t64 zip
+            - name: 打包 Linux (x64) 构建产物
+              run: |
+                set -e
+                VERSION=$(grep "^version:" pubspec.yaml | head -n1 | sed 's/.*version:[[:space:]]*//; s/+.*//; s/^[[:space:]]*//; s/[[:space:]]*$//')
+                BUNDLE_DIR=build/linux/x64/release/bundle
+                # 在工作区根目录创建 zip
+                cd "$BUNDLE_DIR" && zip -r "$GITHUB_WORKSPACE/WITRN-Analyzer-Linux-${VERSION}-x64.zip" . && cd "$GITHUB_WORKSPACE"
+                # 创建 .deb 包
+                mkdir -p deb_pkg/DEBIAN
+                mkdir -p deb_pkg/usr/bin
+                mkdir -p deb_pkg/usr/share/applications
+                mkdir -p deb_pkg/usr/share/icons/hicolor/256x256/apps
+                cp assets/branding/witrn_analyzer_linux.png deb_pkg/usr/share/icons/hicolor/256x256/apps/witrn_analyzer.png
+                mkdir -p deb_pkg/usr/share/witrn_analyzer
+                cp -r "$BUNDLE_DIR"/* deb_pkg/usr/share/witrn_analyzer/
+                printf 'Package: witrn-analyzer\nVersion: %s\nSection: utils\nPriority: optional\nArchitecture: amd64\nMaintainer: lxdklp\nDepends: libgtk-3-0t64, libstdc++6, libudev1, libusb-1.0-0, libhidapi-hidraw0\nDescription: WITRN K2 USB Power Delivery and power analyzer\n' "$VERSION" > deb_pkg/DEBIAN/control
+                printf '#!/bin/bash\nexec /usr/share/witrn_analyzer/witrn_analyzer "$@"\n' > deb_pkg/usr/bin/witrn_analyzer
+                chmod +x deb_pkg/usr/bin/witrn_analyzer
+                printf '[Desktop Entry]\nName=WITRN-Analyzer\nExec=/usr/share/witrn_analyzer/witrn_analyzer\nIcon=witrn_analyzer\nType=Application\nCategories=Utility;\n' > deb_pkg/usr/share/applications/witrn_analyzer.desktop
+                dpkg-deb --root-owner-group --build deb_pkg "WITRN-Analyzer-Linux-${VERSION}-x64.deb"
+                # 创建 AppImage
+                mkdir -p AppDir/usr/bin
+                mkdir -p AppDir/usr/share/applications
+                mkdir -p AppDir/usr/share/icons/hicolor/256x256/apps
+                cp -r "$BUNDLE_DIR"/* AppDir/usr/bin/
+                # Copy icon to AppDir root (required by appimagetool)
+                if [ -f "assets/branding/witrn_analyzer_linux.png" ]; then
+                  cp assets/branding/witrn_analyzer_linux.png AppDir/witrn_analyzer.png
+                else
+                  echo "Missing application icon" >&2; exit 1
+                fi
+                cp AppDir/witrn_analyzer.png AppDir/usr/share/icons/hicolor/256x256/apps/witrn_analyzer.png
+                printf '[Desktop Entry]\nName=WITRN-Analyzer\nExec=witrn_analyzer\nIcon=witrn_analyzer\nType=Application\nCategories=Utility;\n' > AppDir/witrn_analyzer.desktop
+                cp AppDir/witrn_analyzer.desktop AppDir/usr/share/applications/
+                # Shell variables below must expand when AppRun runs, not while packaging.
+                # shellcheck disable=SC2016
+                printf '#!/bin/bash\nexport LD_LIBRARY_PATH="$APPDIR/usr/bin/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"\nexec "$APPDIR/usr/bin/witrn_analyzer" "$@"\n' > AppDir/AppRun
+                chmod +x AppDir/AppRun
+                curl --fail --location --retry 3 -o appimagetool https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
+                chmod +x appimagetool
+                ARCH=x86_64 ./appimagetool --appimage-extract-and-run AppDir "WITRN-Analyzer-Linux-${VERSION}-x64.AppImage"
+            - name: 上传 Linux (x64) 构建产物
+              uses: actions/upload-artifact@v7
+              with:
+                name: linux-x64-release
+                path: |
+                  WITRN-Analyzer-Linux-*-x64.zip
+                  WITRN-Analyzer-Linux-*-x64.deb
+                  WITRN-Analyzer-Linux-*-x64.AppImage
+                retention-days: 7
+                if-no-files-found: error
+
+    build-linux-arm64:
+        name: 构建 Linux (arm64)
+        runs-on: ubuntu-24.04-arm
+        steps:
+            - name: 签出代码
+              uses: actions/checkout@v6
+            - name: 配置 Linux (arm64)
+              run: |
+                sudo apt-get update
+                sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev libstdc++-12-dev libudev-dev libusb-1.0-0-dev libhidapi-hidraw0 libfuse2t64
+            - name: 配置 Flutter
+              run: |
+                set -e
+                echo "Cloning pinned Flutter version into $HOME/flutter"
+                git clone https://github.com/flutter/flutter.git -b "$FLUTTER_VERSION" --depth 1 "$HOME/flutter"
+                echo "$HOME/flutter/bin" >> "$GITHUB_PATH"
+                export PATH="$HOME/flutter/bin:$PATH"
+                flutter --version
+                flutter precache --linux
+            - name: 安装依赖
+              run: flutter pub get
+            - name: 构建 Linux (arm64) 版本
+              run: flutter build linux --release
+            - name: 安装打包工具
+              run: |
+                sudo apt-get update
+                sudo apt-get install -y libfuse2t64 zip
+            - name: 打包 Linux (arm64) 构建产物
+              run: |
+                set -e
+                VERSION=$(grep "^version:" pubspec.yaml | head -n1 | sed 's/.*version:[[:space:]]*//; s/+.*//; s/^[[:space:]]*//; s/[[:space:]]*$//')
+                BUNDLE_DIR=build/linux/arm64/release/bundle
+                # 在工作区根目录创建 zip
+                cd "$BUNDLE_DIR" && zip -r "$GITHUB_WORKSPACE/WITRN-Analyzer-Linux-${VERSION}-arm64.zip" . && cd "$GITHUB_WORKSPACE"
+                # 创建 .deb 包
+                mkdir -p deb_pkg/DEBIAN
+                mkdir -p deb_pkg/usr/bin
+                mkdir -p deb_pkg/usr/share/applications
+                mkdir -p deb_pkg/usr/share/icons/hicolor/256x256/apps
+                cp assets/branding/witrn_analyzer_linux.png deb_pkg/usr/share/icons/hicolor/256x256/apps/witrn_analyzer.png
+                mkdir -p deb_pkg/usr/share/witrn_analyzer
+                cp -r "$BUNDLE_DIR"/* deb_pkg/usr/share/witrn_analyzer/
+                printf 'Package: witrn-analyzer\nVersion: %s\nSection: utils\nPriority: optional\nArchitecture: arm64\nMaintainer: lxdklp\nDepends: libgtk-3-0t64, libstdc++6, libudev1, libusb-1.0-0, libhidapi-hidraw0\nDescription: WITRN K2 USB Power Delivery and power analyzer\n' "$VERSION" > deb_pkg/DEBIAN/control
+                printf '#!/bin/bash\nexec /usr/share/witrn_analyzer/witrn_analyzer "$@"\n' > deb_pkg/usr/bin/witrn_analyzer
+                chmod +x deb_pkg/usr/bin/witrn_analyzer
+                printf '[Desktop Entry]\nName=WITRN-Analyzer\nExec=/usr/share/witrn_analyzer/witrn_analyzer\nIcon=witrn_analyzer\nType=Application\nCategories=Utility;\n' > deb_pkg/usr/share/applications/witrn_analyzer.desktop
+                dpkg-deb --root-owner-group --build deb_pkg "WITRN-Analyzer-Linux-${VERSION}-arm64.deb"
+                # 创建 AppImage
+                mkdir -p AppDir/usr/bin
+                mkdir -p AppDir/usr/share/applications
+                mkdir -p AppDir/usr/share/icons/hicolor/256x256/apps
+                cp -r "$BUNDLE_DIR"/* AppDir/usr/bin/
+                # Copy icon to AppDir root (required by appimagetool)
+                if [ -f "assets/branding/witrn_analyzer_linux.png" ]; then
+                  cp assets/branding/witrn_analyzer_linux.png AppDir/witrn_analyzer.png
+                else
+                  echo "Missing application icon" >&2; exit 1
+                fi
+                cp AppDir/witrn_analyzer.png AppDir/usr/share/icons/hicolor/256x256/apps/witrn_analyzer.png
+                printf '[Desktop Entry]\nName=WITRN-Analyzer\nExec=witrn_analyzer\nIcon=witrn_analyzer\nType=Application\nCategories=Utility;\n' > AppDir/witrn_analyzer.desktop
+                cp AppDir/witrn_analyzer.desktop AppDir/usr/share/applications/
+                # Shell variables below must expand when AppRun runs, not while packaging.
+                # shellcheck disable=SC2016
+                printf '#!/bin/bash\nexport LD_LIBRARY_PATH="$APPDIR/usr/bin/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"\nexec "$APPDIR/usr/bin/witrn_analyzer" "$@"\n' > AppDir/AppRun
+                chmod +x AppDir/AppRun
+                curl --fail --location --retry 3 -o appimagetool https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-aarch64.AppImage
+                chmod +x appimagetool
+                ARCH=aarch64 ./appimagetool --appimage-extract-and-run AppDir "WITRN-Analyzer-Linux-${VERSION}-arm64.AppImage"
+            - name: 上传 Linux (arm64) 构建产物
+              uses: actions/upload-artifact@v7
+              with:
+                name: linux-arm64-release
+                path: |
+                  WITRN-Analyzer-Linux-*-arm64.zip
+                  WITRN-Analyzer-Linux-*-arm64.deb
+                  WITRN-Analyzer-Linux-*-arm64.AppImage
+                retention-days: 7
+                if-no-files-found: error
+
+    build-macos-universal:
+        name: 构建 macOS (universal)
+        runs-on: macos-latest
+        steps:
+            - name: 签出代码
+              uses: actions/checkout@v6
+
+            - name: 配置 Flutter
+              uses: subosito/flutter-action@v2
+              with:
+                flutter-version: ${{ env.FLUTTER_VERSION }}
+                channel: 'stable'
+                cache: true
+            - name: 配置 macOS (universal) 构建
+              run: flutter config --no-enable-macos-arm64-only
+            - name: 安装依赖
+              run: flutter pub get
+            - name: 构建 macOS (universal) 版本
+              run: flutter build macos --release
+            - name: 创建 dmg 镜像
+              run: |
+                set -e
+                VERSION=$(grep "^version:" pubspec.yaml | head -n1 | sed 's/.*version:[[:space:]]*//; s/+.*//; s/^[[:space:]]*//; s/[[:space:]]*$//')
+                RELEASE_DIR="build/macos/Build/Products/Release"
+                echo "Looking for .app in: $RELEASE_DIR"
+                echo "Release dir contents:"
+                ls -la "$RELEASE_DIR" || true
+                # 查找 .app 包
+                APP_DIR="$RELEASE_DIR/WITRN Analyzer.app"
+                test -d "$APP_DIR"
+                echo "Found app bundle: $APP_DIR"
+                APP_NAME=$(basename "$APP_DIR" .app)
+                OUT_NAME="WITRN-Analyzer-macOS-${VERSION}-universal.dmg"
+                echo "Creating DMG: $OUT_NAME"
+                # 创建一个暂存文件夹
+                DMG_STAGE="dmg_stage"
+                mkdir -p "$DMG_STAGE"
+                cp -R "$APP_DIR" "$DMG_STAGE/"
+                ln -s /Applications "$DMG_STAGE/Applications"
+                echo "DMG stage contents:"
+                ls -la "$DMG_STAGE"
+                hdiutil create -volname "$APP_NAME" -srcfolder "$DMG_STAGE" -ov -format UDZO "$OUT_NAME"
+                rm -rf "$DMG_STAGE"
+            - name: 上传 macOS (universal) 构建产物
+              uses: actions/upload-artifact@v7
+              with:
+                name: macos-universal-release
+                path: WITRN-Analyzer-macOS-*-universal.dmg
+                retention-days: 7
+                if-no-files-found: error
+
+    build-macos-arm64:
+        name: 构建 macOS (arm64)
+        runs-on: macos-latest
+        steps:
+            - name: 签出代码
+              uses: actions/checkout@v6
+
+            - name: 配置 Flutter
+              uses: subosito/flutter-action@v2
+              with:
+                flutter-version: ${{ env.FLUTTER_VERSION }}
+                channel: 'stable'
+                cache: true
+            - name: 配置 macOS (arm64) 构建
+              run: flutter config --enable-macos-arm64-only
+            - name: 安装依赖
+              run: flutter pub get
+            - name: 构建 macOS (arm64) 版本
+              run: flutter build macos --release
+            - name: 创建 dmg 镜像
+              run: |
+                set -e
+                VERSION=$(grep "^version:" pubspec.yaml | head -n1 | sed 's/.*version:[[:space:]]*//; s/+.*//; s/^[[:space:]]*//; s/[[:space:]]*$//')
+                RELEASE_DIR="build/macos/Build/Products/Release"
+                echo "Looking for .app in: $RELEASE_DIR"
+                echo "Release dir contents:"
+                ls -la "$RELEASE_DIR" || true
+                # 查找 .app 包
+                APP_DIR="$RELEASE_DIR/WITRN Analyzer.app"
+                test -d "$APP_DIR"
+                echo "Found app bundle: $APP_DIR"
+                APP_NAME=$(basename "$APP_DIR" .app)
+                OUT_NAME="WITRN-Analyzer-macOS-${VERSION}-arm64.dmg"
+                echo "Creating DMG: $OUT_NAME"
+                # 创建一个暂存文件夹
+                DMG_STAGE="dmg_stage"
+                mkdir -p "$DMG_STAGE"
+                cp -R "$APP_DIR" "$DMG_STAGE/"
+                ln -s /Applications "$DMG_STAGE/Applications"
+                echo "DMG stage contents:"
+                ls -la "$DMG_STAGE"
+                hdiutil create -volname "$APP_NAME" -srcfolder "$DMG_STAGE" -ov -format UDZO "$OUT_NAME"
+                rm -rf "$DMG_STAGE"
+            - name: 上传 macOS (arm64) 构建产物
+              uses: actions/upload-artifact@v7
+              with:
+                name: macos-arm64-release
+                path: WITRN-Analyzer-macOS-*-arm64.dmg
+                retention-days: 7
+                if-no-files-found: error
+
+    build-android:
+        name: 构建 Android (通用 APK + ABI 分包)
+        runs-on: ubuntu-24.04
+        steps:
+            - name: 签出代码
+              uses: actions/checkout@v6
+            - name: 配置 Java
+              uses: actions/setup-java@v5
+              with:
+                distribution: temurin
+                java-version: '25'
+            - name: 配置 Android SDK
+              uses: android-actions/setup-android@v3
+            - name: 配置 Flutter
+              uses: subosito/flutter-action@v2
+              with:
+                flutter-version: ${{ env.FLUTTER_VERSION }}
+                channel: stable
+                cache: true
+            - name: 恢复 Android 签名
+              env:
+                ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+                ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+                ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+                ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+              run: python3 scripts/configure_android_signing.py
+            - name: 安装依赖
+              run: flutter pub get
+            - name: 构建并保存通用 APK
+              run: |
+                set -euo pipefail
+                flutter build apk --release --target-platform android-arm,android-arm64,android-x64
+                VERSION=$(sed -n 's/^version: *//p' pubspec.yaml | cut -d+ -f1)
+                mkdir -p dist/android
+                cp build/app/outputs/flutter-apk/app-release.apk "dist/android/WITRN-Analyzer-Android-${VERSION}-universal.apk"
+            - name: 构建并保存 ABI 分包
+              run: |
+                set -euo pipefail
+                flutter build apk --release --split-per-abi --target-platform android-arm,android-arm64,android-x64
+                VERSION=$(sed -n 's/^version: *//p' pubspec.yaml | cut -d+ -f1)
+                for ABI in armeabi-v7a arm64-v8a x86_64; do
+                  cp "build/app/outputs/flutter-apk/app-${ABI}-release.apk" "dist/android/WITRN-Analyzer-Android-${VERSION}-${ABI}.apk"
+                done
+            - name: 上传 Android 构建产物
+              uses: actions/upload-artifact@v7
+              with:
+                name: android-release
+                path: dist/android/*.apk
+                retention-days: 7
+                if-no-files-found: error
+            - name: 清理签名文件
+              if: always()
+              run: rm -f android/key.properties android/signing/ci-keystore.jks
+
+    release:
+      name: 创建发布
+      needs: [build-windows, build-linux-x64, build-linux-arm64, build-macos-universal, build-macos-arm64, build-android]
+      runs-on: ubuntu-24.04
+      if: startsWith(github.ref, 'refs/tags/v') && github.event.inputs.skip_release != 'true'
+      permissions:
+        contents: write
+      steps:
+            - name: 下载所有构建产物
+              uses: actions/download-artifact@v8
+              with:
+                path: artifacts
+            - name: 创建 GitHub Release
+              uses: softprops/action-gh-release@v3
+              with:
+                files: |
+                  artifacts/windows-x64-release/WITRN-Analyzer-Windows-*-x64.zip
+                  artifacts/windows-x64-release/WITRN-Analyzer-Windows-*-x64-setup.exe
+                  artifacts/windows-arm64-release/WITRN-Analyzer-Windows-*-arm64.zip
+                  artifacts/windows-arm64-release/WITRN-Analyzer-Windows-*-arm64-setup.exe
+                  artifacts/linux-x64-release/WITRN-Analyzer-Linux-*-x64.zip
+                  artifacts/linux-x64-release/WITRN-Analyzer-Linux-*-x64.deb
+                  artifacts/linux-x64-release/WITRN-Analyzer-Linux-*-x64.AppImage
+                  artifacts/linux-arm64-release/WITRN-Analyzer-Linux-*-arm64.zip
+                  artifacts/linux-arm64-release/WITRN-Analyzer-Linux-*-arm64.deb
+                  artifacts/linux-arm64-release/WITRN-Analyzer-Linux-*-arm64.AppImage
+                  artifacts/macos-universal-release/WITRN-Analyzer-macOS-*-universal.dmg
+                  artifacts/macos-arm64-release/WITRN-Analyzer-macOS-*-arm64.dmg
+                  artifacts/android-release/*.apk
+                fail_on_unmatched_files: true
+                draft: false
+                prerelease: false
+                generate_release_notes: true

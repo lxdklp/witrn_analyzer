@@ -1,0 +1,35 @@
+name: witrn_analyzer
+description: WITRN K2 USB Power Delivery protocol and power analyzer.
+publish_to: none
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.13.3
+  flutter: '>=3.47.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_localizations:
+    sdk: flutter
+  syncfusion_flutter_charts: 35.1.37
+  hid_tool:
+    path: third_party/hid_tool
+  file_picker: ^13.1.0
+  csv: ^8.0.0
+  dynamic_color: ^1.9.0
+  shared_preferences: ^2.5.5
+  package_info_plus: ^10.2.2
+  url_launcher: ^6.3.3
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+  flutter_launcher_icons: ^0.14.4
+  shared_preferences_platform_interface: ^2.4.2
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/branding/witrn_analyzer_windows.png

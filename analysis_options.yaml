@@ -1,0 +1,19 @@
+include: package:flutter_lints/flutter.yaml
+
+analyzer:
+  exclude:
+    - build/**
+    - third_party/**
+    - android/**
+    - windows/**
+    - macos/**
+    - linux/**
+  language:
+    strict-casts: true
+    strict-inference: true
+
+linter:
+  rules:
+    avoid_print: true
+    unawaited_futures: true
+    use_super_parameters: true

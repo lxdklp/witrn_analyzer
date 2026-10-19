@@ -1,0 +1,29 @@
+PODS:
+  - FlutterMacOS (1.0.0)
+  - hid_tool (0.0.7):
+    - FlutterMacOS
+    - hidapi (= 0.15.0)
+  - hidapi (0.15.0)
+
+DEPENDENCIES:
+  - FlutterMacOS (from `Flutter/ephemeral`)
+  - hid_tool (from `Flutter/ephemeral/.symlinks/plugins/hid_tool/macos`)
+
+SPEC REPOS:
+  trunk:
+    - hidapi
+
+EXTERNAL SOURCES:
+  FlutterMacOS:
+    :path: Flutter/ephemeral
+  hid_tool:
+    :path: Flutter/ephemeral/.symlinks/plugins/hid_tool/macos
+
+SPEC CHECKSUMS:
+  FlutterMacOS: c232990155153907050900a2e175c7773903ba4e
+  hid_tool: b38bff5e0380355c4af6ba67914cf55f51e2b8db
+  hidapi: ad099dc951644cd423d8ab7eb8a275523554000b
+
+PODFILE CHECKSUM: 1e95c36afbfd1cb6423ceca4de7a8e1b256fb6ac
+
+COCOAPODS: 1.17.0

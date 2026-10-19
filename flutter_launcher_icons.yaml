@@ -1,0 +1,15 @@
+flutter_launcher_icons:
+  android: true
+  image_path: assets/branding/witrn_analyzer.png
+  adaptive_icon_background: "#F7F8FA"
+  adaptive_icon_foreground: assets/branding/witrn_analyzer_adaptive_foreground.png
+  adaptive_icon_foreground_inset: 16
+  adaptive_icon_monochrome: assets/branding/witrn_analyzer_monochrome.png
+  windows:
+    generate: true
+    image_path: assets/branding/witrn_analyzer_windows.png
+    icon_size: 256
+  macos:
+    generate: true
+    # Prepared from the independent witrn_analyzer_macos_artwork.png copy.
+    image_path: assets/branding/witrn_analyzer_macos.png
