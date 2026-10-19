@@ -1,0 +1,179 @@
+{
+  "schema_version": 1,
+  "purpose": "Synthetic porting vectors, not physical-device captures or a complete USB PD conformance suite",
+  "app_version": "3.7.8",
+  "witrnhid_version": "1.1.5",
+  "usbpdparser_version": "1.1.5",
+  "default_profile": "witrnCompat",
+  "context_rule": "Fresh parser/session for each case; preserve context between reports within one case. Standard profile applies only where stated.",
+  "verification": "Observed legacy values executed in Python on 2026-09-27; recommended_status values are new implementation requirements. No Flutter, HID hardware, or real export files were exercised.",
+  "cases": [
+    {
+      "id": "goodcrc",
+      "input_kind": "witrn_hid",
+      "reports_hex": [
+        "FE03E081000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      ],
+      "expected": {
+        "message_type": "GoodCRC",
+        "revision": "3.x",
+        "power_role": "Sink",
+        "data_role": "UFP",
+        "message_id": 0,
+        "data_object_count": 0,
+        "pd_raw_hex": "8100"
+      }
+    },
+    {
+      "id": "fixed_pdo_then_request",
+      "input_kind": "witrn_hid",
+      "reports_hex": [
+        "FE07E0A1112C91010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+        "FE07E082122C21031000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      ],
+      "expected": {
+        "last_message_type": "Request",
+        "pdo_voltage_v": 5.0,
+        "pdo_max_current_a": 3.0,
+        "request_object_position": 1,
+        "request_operating_current_a": 2.0,
+        "request_max_current_a": 3.0
+      }
+    },
+    {
+      "id": "request_without_context",
+      "input_kind": "witrn_hid",
+      "reports_hex": [
+        "FE07E082122C21031000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      ],
+      "expected": {
+        "legacy_data_objects": "Invalid Request Message",
+        "recommended_status": "missingContext"
+      }
+    },
+    {
+      "id": "pps_pdo_then_request",
+      "input_kind": "witrn_hid",
+      "reports_hex": [
+        "FE0BE0A1212C9101003C21DCC0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+        "FE07E082142884032000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      ],
+      "expected": {
+        "pps_min_voltage_v": 3.3,
+        "pps_max_voltage_v": 11.0,
+        "pps_max_current_a": 3.0,
+        "request_voltage_v": 9.0,
+        "request_current_a": 2.0,
+        "request_object_position": 2
+      }
+    },
+    {
+      "id": "pps_private_bit25",
+      "input_kind": "witrn_hid",
+      "reports_hex": [
+        "FE07E0A1113C21DCC200000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      ],
+      "expected": {
+        "witrn_compat_max_voltage_v": 36.6,
+        "standard_profile_max_voltage_v": 11.0,
+        "min_voltage_v": 3.3,
+        "max_current_a": 3.0
+      }
+    },
+    {
+      "id": "unknown_sop",
+      "input_kind": "witrn_hid",
+      "reports_hex": [
+        "FE03FF81000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      ],
+      "expected": {
+        "legacy_sop": "SOP",
+        "recommended_status": "unknownSop"
+      }
+    },
+    {
+      "id": "invalid_rdo_position_zero",
+      "input_kind": "witrn_hid",
+      "reports_hex": [
+        "FE07E0A1112C91010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+        "FE07E082120000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      ],
+      "expected": {
+        "legacy_object_position": 0,
+        "legacy_selects_last_pdo": true,
+        "recommended_status": "invalidObjectPosition"
+      }
+    },
+    {
+      "id": "general_negative_current",
+      "input_kind": "witrn_hid",
+      "reports_hex": [
+        "FF000000000000000000000000000000C03F0000F0404D0E00007B0000009A99193F3333333F000000000000C8410000A040000000C0000C1700000000000000"
+      ],
+      "expected": {
+        "voltage_v": 5.0,
+        "current_a": -2.0,
+        "display_power_w": 10.0,
+        "cc1_v": 1.2,
+        "cc2_v": 2.3,
+        "dp_v": 0.6,
+        "dn_v": 0.7,
+        "temperature_c": 25.0,
+        "ah": 1.5,
+        "wh": 7.5,
+        "record_seconds": 3661,
+        "runtime_seconds": 123,
+        "group": 1
+      },
+      "float_tolerance": 1e-06
+    },
+    {
+      "id": "pd_with_crc",
+      "input_kind": "witrn_hid",
+      "reports_hex": [
+        "FE0BE0A1112C910100DA2E2C31000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      ],
+      "expected": {
+        "message_type": "Source_Capabilities",
+        "crc_when_checked": "valid",
+        "pd_raw_hex": "A1112C910100DA2E2C31",
+        "legacy_verify_crc": false
+      }
+    },
+    {
+      "id": "pd_bad_crc",
+      "input_kind": "witrn_hid",
+      "reports_hex": [
+        "FE0BE0A1112C910100DA2E2C30000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      ],
+      "expected": {
+        "legacy_message_type": "Source_Capabilities",
+        "crc_when_checked": "invalid",
+        "legacy_verify_crc": false
+      }
+    },
+    {
+      "id": "unknown_frame_type",
+      "input_kind": "witrn_hid",
+      "reports_hex": [
+        "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      ],
+      "expected": {
+        "legacy_auto_unpack_return": null,
+        "recommended_status": "unknownReportType"
+      }
+    },
+    {
+      "id": "sop_double_prime_4b5b",
+      "input_kind": "decoded_bmc_bits",
+      "bits": "000110110000011011001001001001011110111110110",
+      "expected": {
+        "legacy_status": true,
+        "legacy_sop": "",
+        "legacy_payload_hex": "8100",
+        "recommended_sop": "SOP''"
+      },
+      "note": "Legacy SOP table uses 0x33 where DEC4B5B emits Sync-3=0x13; recommended mapping is a correction to verify against the chosen USB PD specification."
+    }
+  ]
+}

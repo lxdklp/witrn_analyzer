@@ -9,8 +9,7 @@ import 'package:witrn_analyzer/core/power_decoder.dart';
 
 void main() {
   final fixture = jsonDecode(
-    File('docs/witrn_pd_sniffer/docs/fixtures/porting_vectors.json')
-        .readAsStringSync(),
+    File('test/fixtures/porting_vectors.json').readAsStringSync(),
   ) as Map<String, dynamic>;
   List<DecodedReport> decode(
     String id, {

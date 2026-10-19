@@ -146,93 +146,41 @@ jobs:
                 retention-days: 7
                 if-no-files-found: error
 
-    build-linux-x64:
-        name: 构建 Linux (x64)
-        runs-on: ubuntu-24.04
+    build-linux:
+        name: 构建 Linux (${{ matrix.arch }})
+        strategy:
+            fail-fast: false
+            matrix:
+                include:
+                    - arch: x64
+                      runner: ubuntu-24.04
+                      deb_arch: amd64
+                      appimage_arch: x86_64
+                    - arch: arm64
+                      runner: ubuntu-24.04-arm
+                      deb_arch: arm64
+                      appimage_arch: aarch64
+        runs-on: ${{ matrix.runner }}
+        env:
+            LINUX_ARCH: ${{ matrix.arch }}
+            DEB_ARCH: ${{ matrix.deb_arch }}
+            APPIMAGE_ARCH: ${{ matrix.appimage_arch }}
         steps:
             - name: 签出代码
               uses: actions/checkout@v6
-            - name: 配置 Linux (x64)
+            - name: 配置 Linux
               run: |
                 sudo apt-get update
                 sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev libstdc++-12-dev libudev-dev libusb-1.0-0-dev libhidapi-hidraw0
-            - name: 配置 Flutter
+            - name: 配置 Flutter (x64)
+              if: matrix.arch == 'x64'
               uses: subosito/flutter-action@v2
               with:
                 flutter-version: ${{ env.FLUTTER_VERSION }}
                 channel: 'stable'
                 cache: true
-            - name: 安装依赖
-              run: flutter pub get
-            - name: 构建 Linux (x64) 版本
-              run: flutter build linux --release
-            - name: 安装打包工具
-              run: |
-                sudo apt-get update
-                sudo apt-get install -y libfuse2t64 zip
-            - name: 打包 Linux (x64) 构建产物
-              run: |
-                set -e
-                VERSION=$(grep "^version:" pubspec.yaml | head -n1 | sed 's/.*version:[[:space:]]*//; s/+.*//; s/^[[:space:]]*//; s/[[:space:]]*$//')
-                BUNDLE_DIR=build/linux/x64/release/bundle
-                # 在工作区根目录创建 zip
-                cd "$BUNDLE_DIR" && zip -r "$GITHUB_WORKSPACE/WITRN-Analyzer-Linux-${VERSION}-x64.zip" . && cd "$GITHUB_WORKSPACE"
-                # 创建 .deb 包
-                mkdir -p deb_pkg/DEBIAN
-                mkdir -p deb_pkg/usr/bin
-                mkdir -p deb_pkg/usr/share/applications
-                mkdir -p deb_pkg/usr/share/icons/hicolor/256x256/apps
-                cp assets/branding/witrn_analyzer_linux.png deb_pkg/usr/share/icons/hicolor/256x256/apps/witrn_analyzer.png
-                mkdir -p deb_pkg/usr/share/witrn_analyzer
-                cp -r "$BUNDLE_DIR"/* deb_pkg/usr/share/witrn_analyzer/
-                printf 'Package: witrn-analyzer\nVersion: %s\nSection: utils\nPriority: optional\nArchitecture: amd64\nMaintainer: lxdklp\nDepends: libgtk-3-0t64, libstdc++6, libudev1, libusb-1.0-0, libhidapi-hidraw0\nDescription: WITRN K2 USB Power Delivery and power analyzer\n' "$VERSION" > deb_pkg/DEBIAN/control
-                printf '#!/bin/bash\nexec /usr/share/witrn_analyzer/witrn_analyzer "$@"\n' > deb_pkg/usr/bin/witrn_analyzer
-                chmod +x deb_pkg/usr/bin/witrn_analyzer
-                printf '[Desktop Entry]\nName=WITRN-Analyzer\nExec=/usr/share/witrn_analyzer/witrn_analyzer\nIcon=witrn_analyzer\nType=Application\nCategories=Utility;\n' > deb_pkg/usr/share/applications/witrn_analyzer.desktop
-                dpkg-deb --root-owner-group --build deb_pkg "WITRN-Analyzer-Linux-${VERSION}-x64.deb"
-                # 创建 AppImage
-                mkdir -p AppDir/usr/bin
-                mkdir -p AppDir/usr/share/applications
-                mkdir -p AppDir/usr/share/icons/hicolor/256x256/apps
-                cp -r "$BUNDLE_DIR"/* AppDir/usr/bin/
-                # Copy icon to AppDir root (required by appimagetool)
-                if [ -f "assets/branding/witrn_analyzer_linux.png" ]; then
-                  cp assets/branding/witrn_analyzer_linux.png AppDir/witrn_analyzer.png
-                else
-                  echo "Missing application icon" >&2; exit 1
-                fi
-                cp AppDir/witrn_analyzer.png AppDir/usr/share/icons/hicolor/256x256/apps/witrn_analyzer.png
-                printf '[Desktop Entry]\nName=WITRN-Analyzer\nExec=witrn_analyzer\nIcon=witrn_analyzer\nType=Application\nCategories=Utility;\n' > AppDir/witrn_analyzer.desktop
-                cp AppDir/witrn_analyzer.desktop AppDir/usr/share/applications/
-                # Shell variables below must expand when AppRun runs, not while packaging.
-                # shellcheck disable=SC2016
-                printf '#!/bin/bash\nexport LD_LIBRARY_PATH="$APPDIR/usr/bin/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"\nexec "$APPDIR/usr/bin/witrn_analyzer" "$@"\n' > AppDir/AppRun
-                chmod +x AppDir/AppRun
-                curl --fail --location --retry 3 -o appimagetool https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
-                chmod +x appimagetool
-                ARCH=x86_64 ./appimagetool --appimage-extract-and-run AppDir "WITRN-Analyzer-Linux-${VERSION}-x64.AppImage"
-            - name: 上传 Linux (x64) 构建产物
-              uses: actions/upload-artifact@v7
-              with:
-                name: linux-x64-release
-                path: |
-                  WITRN-Analyzer-Linux-*-x64.zip
-                  WITRN-Analyzer-Linux-*-x64.deb
-                  WITRN-Analyzer-Linux-*-x64.AppImage
-                retention-days: 7
-                if-no-files-found: error
-
-    build-linux-arm64:
-        name: 构建 Linux (arm64)
-        runs-on: ubuntu-24.04-arm
-        steps:
-            - name: 签出代码
-              uses: actions/checkout@v6
-            - name: 配置 Linux (arm64)
-              run: |
-                sudo apt-get update
-                sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev libstdc++-12-dev libudev-dev libusb-1.0-0-dev libhidapi-hidraw0 libfuse2t64
-            - name: 配置 Flutter
+            - name: 配置 Flutter (原生 ARM64)
+              if: matrix.arch == 'arm64'
               run: |
                 set -e
                 echo "Cloning pinned Flutter version into $HOME/flutter"
@@ -243,19 +191,19 @@ jobs:
                 flutter precache --linux
             - name: 安装依赖
               run: flutter pub get
-            - name: 构建 Linux (arm64) 版本
+            - name: 构建 Linux 版本
               run: flutter build linux --release
             - name: 安装打包工具
               run: |
                 sudo apt-get update
                 sudo apt-get install -y libfuse2t64 zip
-            - name: 打包 Linux (arm64) 构建产物
+            - name: 打包 Linux 构建产物
               run: |
                 set -e
                 VERSION=$(grep "^version:" pubspec.yaml | head -n1 | sed 's/.*version:[[:space:]]*//; s/+.*//; s/^[[:space:]]*//; s/[[:space:]]*$//')
-                BUNDLE_DIR=build/linux/arm64/release/bundle
+                BUNDLE_DIR="build/linux/${LINUX_ARCH}/release/bundle"
                 # 在工作区根目录创建 zip
-                cd "$BUNDLE_DIR" && zip -r "$GITHUB_WORKSPACE/WITRN-Analyzer-Linux-${VERSION}-arm64.zip" . && cd "$GITHUB_WORKSPACE"
+                cd "$BUNDLE_DIR" && zip -r "$GITHUB_WORKSPACE/WITRN-Analyzer-Linux-${VERSION}-${LINUX_ARCH}.zip" . && cd "$GITHUB_WORKSPACE"
                 # 创建 .deb 包
                 mkdir -p deb_pkg/DEBIAN
                 mkdir -p deb_pkg/usr/bin
@@ -264,11 +212,11 @@ jobs:
                 cp assets/branding/witrn_analyzer_linux.png deb_pkg/usr/share/icons/hicolor/256x256/apps/witrn_analyzer.png
                 mkdir -p deb_pkg/usr/share/witrn_analyzer
                 cp -r "$BUNDLE_DIR"/* deb_pkg/usr/share/witrn_analyzer/
-                printf 'Package: witrn-analyzer\nVersion: %s\nSection: utils\nPriority: optional\nArchitecture: arm64\nMaintainer: lxdklp\nDepends: libgtk-3-0t64, libstdc++6, libudev1, libusb-1.0-0, libhidapi-hidraw0\nDescription: WITRN K2 USB Power Delivery and power analyzer\n' "$VERSION" > deb_pkg/DEBIAN/control
+                printf 'Package: witrn-analyzer\nVersion: %s\nSection: utils\nPriority: optional\nArchitecture: %s\nMaintainer: lxdklp\nDepends: libgtk-3-0t64, libstdc++6, libudev1, libusb-1.0-0, libhidapi-hidraw0\nDescription: WITRN K2 USB Power Delivery and power analyzer\n' "$VERSION" "$DEB_ARCH" > deb_pkg/DEBIAN/control
                 printf '#!/bin/bash\nexec /usr/share/witrn_analyzer/witrn_analyzer "$@"\n' > deb_pkg/usr/bin/witrn_analyzer
                 chmod +x deb_pkg/usr/bin/witrn_analyzer
                 printf '[Desktop Entry]\nName=WITRN-Analyzer\nExec=/usr/share/witrn_analyzer/witrn_analyzer\nIcon=witrn_analyzer\nType=Application\nCategories=Utility;\n' > deb_pkg/usr/share/applications/witrn_analyzer.desktop
-                dpkg-deb --root-owner-group --build deb_pkg "WITRN-Analyzer-Linux-${VERSION}-arm64.deb"
+                dpkg-deb --root-owner-group --build deb_pkg "WITRN-Analyzer-Linux-${VERSION}-${LINUX_ARCH}.deb"
                 # 创建 AppImage
                 mkdir -p AppDir/usr/bin
                 mkdir -p AppDir/usr/share/applications
@@ -287,23 +235,34 @@ jobs:
                 # shellcheck disable=SC2016
                 printf '#!/bin/bash\nexport LD_LIBRARY_PATH="$APPDIR/usr/bin/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"\nexec "$APPDIR/usr/bin/witrn_analyzer" "$@"\n' > AppDir/AppRun
                 chmod +x AppDir/AppRun
-                curl --fail --location --retry 3 -o appimagetool https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-aarch64.AppImage
+                curl --fail --location --retry 3 -o appimagetool "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-${APPIMAGE_ARCH}.AppImage"
                 chmod +x appimagetool
-                ARCH=aarch64 ./appimagetool --appimage-extract-and-run AppDir "WITRN-Analyzer-Linux-${VERSION}-arm64.AppImage"
-            - name: 上传 Linux (arm64) 构建产物
+                ARCH="$APPIMAGE_ARCH" ./appimagetool --appimage-extract-and-run AppDir "WITRN-Analyzer-Linux-${VERSION}-${LINUX_ARCH}.AppImage"
+            - name: 上传 Linux 构建产物
               uses: actions/upload-artifact@v7
               with:
-                name: linux-arm64-release
+                name: linux-${{ matrix.arch }}-release
                 path: |
-                  WITRN-Analyzer-Linux-*-arm64.zip
-                  WITRN-Analyzer-Linux-*-arm64.deb
-                  WITRN-Analyzer-Linux-*-arm64.AppImage
+                  WITRN-Analyzer-Linux-*-${{ matrix.arch }}.zip
+                  WITRN-Analyzer-Linux-*-${{ matrix.arch }}.deb
+                  WITRN-Analyzer-Linux-*-${{ matrix.arch }}.AppImage
                 retention-days: 7
                 if-no-files-found: error
 
-    build-macos-universal:
-        name: 构建 macOS (universal)
+    build-macos:
+        name: 构建 macOS (${{ matrix.arch }})
+        strategy:
+            fail-fast: false
+            matrix:
+                include:
+                    - arch: universal
+                      flutter_config: --no-enable-macos-arm64-only
+                    - arch: arm64
+                      flutter_config: --enable-macos-arm64-only
         runs-on: macos-latest
+        env:
+            MACOS_ARCH: ${{ matrix.arch }}
+            FLUTTER_MACOS_CONFIG: ${{ matrix.flutter_config }}
         steps:
             - name: 签出代码
               uses: actions/checkout@v6
@@ -314,11 +273,11 @@ jobs:
                 flutter-version: ${{ env.FLUTTER_VERSION }}
                 channel: 'stable'
                 cache: true
-            - name: 配置 macOS (universal) 构建
-              run: flutter config --no-enable-macos-arm64-only
+            - name: 配置 macOS 构建
+              run: flutter config "$FLUTTER_MACOS_CONFIG"
             - name: 安装依赖
               run: flutter pub get
-            - name: 构建 macOS (universal) 版本
+            - name: 构建 macOS 版本
               run: flutter build macos --release
             - name: 创建 dmg 镜像
               run: |
@@ -333,7 +292,7 @@ jobs:
                 test -d "$APP_DIR"
                 echo "Found app bundle: $APP_DIR"
                 APP_NAME=$(basename "$APP_DIR" .app)
-                OUT_NAME="WITRN-Analyzer-macOS-${VERSION}-universal.dmg"
+                OUT_NAME="WITRN-Analyzer-macOS-${VERSION}-${MACOS_ARCH}.dmg"
                 echo "Creating DMG: $OUT_NAME"
                 # 创建一个暂存文件夹
                 DMG_STAGE="dmg_stage"
@@ -344,67 +303,24 @@ jobs:
                 ls -la "$DMG_STAGE"
                 hdiutil create -volname "$APP_NAME" -srcfolder "$DMG_STAGE" -ov -format UDZO "$OUT_NAME"
                 rm -rf "$DMG_STAGE"
-            - name: 上传 macOS (universal) 构建产物
+            - name: 上传 macOS 构建产物
               uses: actions/upload-artifact@v7
               with:
-                name: macos-universal-release
-                path: WITRN-Analyzer-macOS-*-universal.dmg
-                retention-days: 7
-                if-no-files-found: error
-
-    build-macos-arm64:
-        name: 构建 macOS (arm64)
-        runs-on: macos-latest
-        steps:
-            - name: 签出代码
-              uses: actions/checkout@v6
-
-            - name: 配置 Flutter
-              uses: subosito/flutter-action@v2
-              with:
-                flutter-version: ${{ env.FLUTTER_VERSION }}
-                channel: 'stable'
-                cache: true
-            - name: 配置 macOS (arm64) 构建
-              run: flutter config --enable-macos-arm64-only
-            - name: 安装依赖
-              run: flutter pub get
-            - name: 构建 macOS (arm64) 版本
-              run: flutter build macos --release
-            - name: 创建 dmg 镜像
-              run: |
-                set -e
-                VERSION=$(grep "^version:" pubspec.yaml | head -n1 | sed 's/.*version:[[:space:]]*//; s/+.*//; s/^[[:space:]]*//; s/[[:space:]]*$//')
-                RELEASE_DIR="build/macos/Build/Products/Release"
-                echo "Looking for .app in: $RELEASE_DIR"
-                echo "Release dir contents:"
-                ls -la "$RELEASE_DIR" || true
-                # 查找 .app 包
-                APP_DIR="$RELEASE_DIR/WITRN Analyzer.app"
-                test -d "$APP_DIR"
-                echo "Found app bundle: $APP_DIR"
-                APP_NAME=$(basename "$APP_DIR" .app)
-                OUT_NAME="WITRN-Analyzer-macOS-${VERSION}-arm64.dmg"
-                echo "Creating DMG: $OUT_NAME"
-                # 创建一个暂存文件夹
-                DMG_STAGE="dmg_stage"
-                mkdir -p "$DMG_STAGE"
-                cp -R "$APP_DIR" "$DMG_STAGE/"
-                ln -s /Applications "$DMG_STAGE/Applications"
-                echo "DMG stage contents:"
-                ls -la "$DMG_STAGE"
-                hdiutil create -volname "$APP_NAME" -srcfolder "$DMG_STAGE" -ov -format UDZO "$OUT_NAME"
-                rm -rf "$DMG_STAGE"
-            - name: 上传 macOS (arm64) 构建产物
-              uses: actions/upload-artifact@v7
-              with:
-                name: macos-arm64-release
-                path: WITRN-Analyzer-macOS-*-arm64.dmg
+                name: macos-${{ matrix.arch }}-release
+                path: WITRN-Analyzer-macOS-*-${{ matrix.arch }}.dmg
                 retention-days: 7
                 if-no-files-found: error
 
     build-android:
-        name: 构建 Android (通用 APK + ABI 分包)
+        name: 构建 Android (${{ matrix.name }})
+        strategy:
+            fail-fast: false
+            matrix:
+                include:
+                    - variant: universal
+                      name: 通用 APK
+                    - variant: split
+                      name: ABI 分包
         runs-on: ubuntu-24.04
         steps:
             - name: 签出代码
@@ -416,6 +332,9 @@ jobs:
                 java-version: '25'
             - name: 配置 Android SDK
               uses: android-actions/setup-android@v3
+              with:
+                # Google no longer serves the legacy tools package included in v3 defaults.
+                packages: platform-tools
             - name: 配置 Flutter
               uses: subosito/flutter-action@v2
               with:
@@ -432,6 +351,7 @@ jobs:
             - name: 安装依赖
               run: flutter pub get
             - name: 构建并保存通用 APK
+              if: matrix.variant == 'universal'
               run: |
                 set -euo pipefail
                 flutter build apk --release --target-platform android-arm,android-arm64,android-x64
@@ -439,17 +359,19 @@ jobs:
                 mkdir -p dist/android
                 cp build/app/outputs/flutter-apk/app-release.apk "dist/android/WITRN-Analyzer-Android-${VERSION}-universal.apk"
             - name: 构建并保存 ABI 分包
+              if: matrix.variant == 'split'
               run: |
                 set -euo pipefail
                 flutter build apk --release --split-per-abi --target-platform android-arm,android-arm64,android-x64
                 VERSION=$(sed -n 's/^version: *//p' pubspec.yaml | cut -d+ -f1)
+                mkdir -p dist/android
                 for ABI in armeabi-v7a arm64-v8a x86_64; do
                   cp "build/app/outputs/flutter-apk/app-${ABI}-release.apk" "dist/android/WITRN-Analyzer-Android-${VERSION}-${ABI}.apk"
                 done
             - name: 上传 Android 构建产物
               uses: actions/upload-artifact@v7
               with:
-                name: android-release
+                name: android-${{ matrix.variant }}-release
                 path: dist/android/*.apk
                 retention-days: 7
                 if-no-files-found: error
@@ -459,7 +381,7 @@ jobs:
 
     release:
       name: 创建发布
-      needs: [build-windows, build-linux-x64, build-linux-arm64, build-macos-universal, build-macos-arm64, build-android]
+      needs: [build-windows, build-linux, build-macos, build-android]
       runs-on: ubuntu-24.04
       if: startsWith(github.ref, 'refs/tags/v') && github.event.inputs.skip_release != 'true'
       permissions:
@@ -485,7 +407,8 @@ jobs:
                   artifacts/linux-arm64-release/WITRN-Analyzer-Linux-*-arm64.AppImage
                   artifacts/macos-universal-release/WITRN-Analyzer-macOS-*-universal.dmg
                   artifacts/macos-arm64-release/WITRN-Analyzer-macOS-*-arm64.dmg
-                  artifacts/android-release/*.apk
+                  artifacts/android-universal-release/*.apk
+                  artifacts/android-split-release/*.apk
                 fail_on_unmatched_files: true
                 draft: false
                 prerelease: false
